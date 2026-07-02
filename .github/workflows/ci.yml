@@ -1,0 +1,80 @@
+name: CI/CD
+
+# Déclencheurs du pipeline
+on:
+  push:
+    branches: [ main, dev ]        # build + scan sur chaque push (pas de push Docker Hub)
+    tags: [ 'v*.*.*' ]             # ex: v1.0.0 -> build + scan + PUSH sur Docker Hub
+  pull_request:
+    branches: [ main ]             # build + scan sur les PR vers main
+
+env:
+  # Image = <ton_user_dockerhub>/<nom_du_repo>. Le user vient du secret, le nom du repo est auto.
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}
+
+jobs:
+  build-scan-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # 1. Récupère le code du repo
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. Calcule automatiquement les tags Docker (semver, latest, sha...)
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}          # v1.2.3 -> 1.2.3
+            type=semver,pattern={{major}}.{{minor}}  # v1.2.3 -> 1.2
+            type=ref,event=branch                     # nom de la branche
+            type=sha                                  # sha du commit
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # 3. Prépare Buildx (moteur de build moderne + cache)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 4. Build l'image EN LOCAL (load) pour pouvoir la scanner avant tout push
+      - name: Build (local, pour le scan)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # 5. Scan de vulnérabilités avec Trivy — échoue si HIGH/CRITICAL trouvé
+      - name: Scan Trivy
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          format: table
+          exit-code: '1'            # casse le pipeline si vulnérabilité
+          ignore-unfixed: true      # ignore celles sans correctif dispo
+          severity: HIGH,CRITICAL
+
+      # 6. Login Docker Hub — UNIQUEMENT sur un tag versionné
+      - name: Login Docker Hub
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 7. Push sur Docker Hub avec tous les tags versionnés — UNIQUEMENT sur un tag
+      - name: Push Docker Hub
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
