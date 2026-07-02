@@ -10,7 +10,7 @@ on:
 
 env:
   # Image = <ton_user_dockerhub>/<nom_du_repo>. Le user vient du secret, le nom du repo est auto.
-  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}
+  IMAGE_NAME: jxpm04/docker    # <pseudo_dockerhub>/<nom_image> — pseudo en dur (non sensible)
 
 jobs:
   build-scan-push:
@@ -65,7 +65,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          username: jxpm04
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # 7. Push sur Docker Hub avec tous les tags versionnés — UNIQUEMENT sur un tag
